@@ -189,8 +189,8 @@ class MessageCatalog(object):
 				   "DE": "RSD0007I {0}: {1}"
 	}
 	MSG_ENTER_PARTITION = {
-				   "EN": "RSD0008I Enter partition name: ",
-				   "DE": "RSD0008I Partitionsnamen eingeben: "
+				   "EN": "RSD0008I Enter partition name or number: ",
+				   "DE": "RSD0008I Partitionsnamen oder eingeben: "
 	}
 	MSG_PARTITION_INVALIDE = {
 				   "EN": "RSD0009E Partition {0} does not exist",
@@ -320,9 +320,11 @@ class Partition(object):
 		if name.startswith("/dev"):
 			self.__deviceName=name
 			self.__partUUID = blkid().getPartUUID(name)
+			self.__initialUUID=False
 		else:
 			self.__partUUID=name
 			self.__deviceName=blkid().getDeviceName(name)								
+			self.__initialUUID=True
 
 		if type == "":
 			self.__partType = DeviceManager().getType(self.__deviceName)
@@ -344,6 +346,9 @@ class Partition(object):
 	def hasPartUUID(self):
 		return self.__partUUID!=""
 
+	def isInitialUUID(self):
+		return self.__initialUUID
+
 	def isSDPartition(self):
 		return self.getDeviceName().startswith(SSD_DEVICE)
 	
@@ -364,7 +369,7 @@ class Partition(object):
 
 class BashCommand(object):
 	
-	__SPLIT_PARTITION_REGEX = "(/dev/[a-zA-Z]+)([0-9]+)"		
+	__SPLIT_PARTITION_REGEX = "(/dev/mmcblk0p|/dev/[a-zA-Z]+)([0-9]+)"		
 
 	def __init__(self, command):
 		self.__command = command
@@ -545,6 +550,8 @@ class parted(BashCommand):
 			
 	def getPartitiontableType(self, partition):
 		(partition, partitionNumber) = self._splitPartition(partition)
+		if partition.startswith(SSD_DEVICE_CARD):
+			partition = SSD_DEVICE_CARD
 		for line in self.getResult():
 			lineElements = line.split(':')
 			if lineElements[0] == partition:
@@ -756,7 +763,7 @@ def collectEligiblePartitions():
 	logger.debug("cmdPartition %s" % (cmdPartition))
 	logger.debug("ROOT_PARTITION %s" % (ROOT_PARTITION))
 
-	if not cmdPartition == ROOT_PARTITION:
+	if not cmdPartition.isSDPartition:
 		print MessageCatalog.getLocalizedMessage(MessageCatalog.MSG_ROOTPARTITION_NOT_ON_SDCARD, cmdPartition.getDeviceName())
 		sys.exit(-1)
 		
@@ -772,10 +779,10 @@ def collectEligiblePartitions():
 	availableTargetPartitionNames = [ p.getDeviceName() for p in availableTargetPartitions ]
 	print MessageCatalog.getLocalizedMessage(MessageCatalog.MSG_TARGET_PARTITION_CANDIDATES, ' '.join(availableTargetPartitionNames))
 	
-	sourceRootPartition = ROOT_PARTITION
-	sourceRootType = dm.getType(ROOT_PARTITION)
-	sourceRootSize = dm.getSize(ROOT_PARTITION)
-	sourceRootFree = dm.getFree(ROOT_PARTITION)
+	sourceRootPartition = cmdPartition
+	sourceRootType = dm.getType(cmdPartition)
+	sourceRootSize = dm.getSize(cmdPartition)
+	sourceRootFree = dm.getFree(cmdPartition)
 	sourceRootUsed = sourceRootSize - sourceRootFree
 
 	logger.debug("cmdPartition: %s\nsourceRootPartition: %s" % (cmdPartition,sourceRootPartition))
@@ -797,30 +804,30 @@ def collectEligiblePartitions():
 		logger.debug("partitionMountPoint: %s" % (partitionMountPoint))
 
 		if partitionMountPoint is None:
-			print MessageCatalog.getLocalizedMessage(MessageCatalog.MSG_PARTITION_NOT_MOUNTED, partition)
+			print MessageCatalog.getLocalizedMessage(MessageCatalog.MSG_PARTITION_NOT_MOUNTED, partition.getDeviceName())
 
 		elif dm.getSize(partition) < sourceRootSize:
 			if not force:
 				if dm.getSize(partition) < sourceRootSize and dm.getFree(partition) < sourceRootUsed:
-					print MessageCatalog.getLocalizedMessage(MessageCatalog.MSG_PARTITION_TOO_SMALL, partition, asReadable(dm.getSize(partition)))							
+					print MessageCatalog.getLocalizedMessage(MessageCatalog.MSG_PARTITION_TOO_SMALL, partition.getDeviceName(), asReadable(dm.getSize(partition)))							
 				else:
-					print MessageCatalog.getLocalizedMessage(MessageCatalog.MSG_PARTITION_TOO_SMALL_BUT_FREE_OK, partition, asReadable(dm.getSize(partition)), asReadable(dm.getFree(partition)))
+					print MessageCatalog.getLocalizedMessage(MessageCatalog.MSG_PARTITION_TOO_SMALL_BUT_FREE_OK, partition.getDeviceName(), asReadable(dm.getSize(partition)), asReadable(dm.getFree(partition)))
 					
 			else:
 				if dm.getFree(partition) < sourceRootUsed:
 					logger.debug("free(%s): %s - sourceRootUsed: %s" % (partition, dm.getFree(partition), sourceRootUsed))
-					print MessageCatalog.getLocalizedMessage(MessageCatalog.MSG_PARTITION_FREE_SPACE_TOO_SMALL, partition, asReadable(dm.getFree(partition)))			
+					print MessageCatalog.getLocalizedMessage(MessageCatalog.MSG_PARTITION_FREE_SPACE_TOO_SMALL, partition.getDeviceName(), asReadable(dm.getFree(partition)))			
 				else:
 					logger.debug("free(%s): %s - sourceRootSize: %s" % (partition, dm.getFree(partition), sourceRootSize))
-					print MessageCatalog.getLocalizedMessage(MessageCatalog.MSG_TARGET_PARTITION_SMALLER_THAN_SOURE_PARTITION, partition, asReadable(dm.getFree(partition)), asReadable(sourceRootSize))
+					print MessageCatalog.getLocalizedMessage(MessageCatalog.MSG_TARGET_PARTITION_SMALLER_THAN_SOURE_PARTITION, partition.getDeviceName(), asReadable(dm.getFree(partition)), asReadable(sourceRootSize))
 					validTargetPartitions.append(partition)
 
 		elif dm.getType(partition) != sourceRootType:
-			logger.debug("type(%s): %s - sourceRootSize: %s" % (partition, dm.getType(partition), sourceRootSize))
-			print MessageCatalog.getLocalizedMessage(MessageCatalog.MSG_PARTITION_INVALID_TYPE, partition, dm.getType(partition))
+			logger.debug("type(%s): %s - sourceRootSize: %s" % (partition.getDeviceName(), dm.getType(partition), sourceRootSize))
+			print MessageCatalog.getLocalizedMessage(MessageCatalog.MSG_PARTITION_INVALID_TYPE, partition.getDeviceName(), dm.getType(partition))
 
 		elif multipleDevices and not dm.isGPT(partition):
-			print MessageCatalog.getLocalizedMessage(MessageCatalog.MSG_PARTITION_INVALID_FILEPARTITION, partition, dm.getPartitiontableType(partition))
+			print MessageCatalog.getLocalizedMessage(MessageCatalog.MSG_PARTITION_INVALID_FILEPARTITION, partition.getDeviceName(), dm.getPartitiontableType(partition))
 
 		elif partition != sourceRootPartition:
 			diskFilesTgt = int(executeCommand('ls -A ' + partitionMountPoint + ' | wc -l'))
@@ -831,10 +838,10 @@ def collectEligiblePartitions():
 			if (diskFilesTgt == 1 and lostDir == 1) or (lostDir == 0 and diskFilesTgt == 0) or piHome:
 				validTargetPartitions.append(partition)
 			else:
-				print MessageCatalog.getLocalizedMessage(MessageCatalog.MSG_PARTITION_NOT_EMPTY, partition)
+				print MessageCatalog.getLocalizedMessage(MessageCatalog.MSG_PARTITION_NOT_EMPTY, partition.getDeviceName())
 
 		else:
-			print MessageCatalog.getLocalizedMessage(MessageCatalog.MSG_PARTITION_UNKNOWN_SKIP, partition)
+			print MessageCatalog.getLocalizedMessage(MessageCatalog.MSG_PARTITION_UNKNOWN_SKIP, partition.getDeviceName())
 							
 	return validTargetPartitions, sourceRootPartition 
 			
@@ -950,12 +957,12 @@ try:
 	sourceDirectory = dm.getMountpoint(sourceRootPartition)
 	targetDirectory = dm.getMountpoint(targetRootPartitionSelected)
 	logger.debug("sourceDirectory: %s - targetDirectory: %s" % (sourceDirectory, targetDirectory))
-	
-	print MessageCatalog.getLocalizedMessage(MessageCatalog.MSG_PARTITION_WILL_BE_COPIED, sourceRootPartition.getDeviceName(), targetRootPartitionSelected.getDeviceName())
-	print MessageCatalog.getLocalizedMessage(MessageCatalog.MSG_ARE_YOU_SURE)
 
 	if dryrun:
 		print MessageCatalog.getLocalizedMessage(MessageCatalog.MSG_DRYRUN)
+	
+	print MessageCatalog.getLocalizedMessage(MessageCatalog.MSG_PARTITION_WILL_BE_COPIED, sourceRootPartition.getDeviceName(), targetRootPartitionSelected.getDeviceName())
+	print MessageCatalog.getLocalizedMessage(MessageCatalog.MSG_ARE_YOU_SURE)
 		
 	selection = raw_input('')
 	if selection not in ['Y', 'y', 'J', 'j']:
@@ -980,7 +987,12 @@ try:
 		executeCommand(command,dryrun=dryrun)
 	
 	# change /etc/fstab on target
-	command = "sed -i \"s|%s|%s|\" %s/etc/fstab" % (sourceRootPartition.getInitialName(), targetID, targetDirectory)
+	
+	sourceRootPartitionName = sourceRootPartition.getInitialName()
+	if sourceRootPartition.isInitialUUID():
+		sourceRootPartitionName = "PARTUUID="+sourceRootPartitionName 
+	
+	command = "sed -i \"s|%s|%s|\" %s/etc/fstab" % (sourceRootPartitionName, targetID, targetDirectory)
 	print MessageCatalog.getLocalizedMessage(MessageCatalog.MSG_UPDATING_FSTAB, targetRootPartitionSelected)
 	executeCommand(command,dryrun=dryrun)
 	
