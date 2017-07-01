@@ -94,20 +94,26 @@ def asReadable(number):
 
 # execute an OS command
 
-def executeCommand(command, noRC=True):
+def executeCommand(command, noRC=True, dryrun=False):
 	global logger
 	rc = None
 	result = None
-	try:
-		proc = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True)
-		result,error = proc.communicate()
-		rc = proc.returncode		
 
-		if rc != 0 and noRC:
-			raise Exception("Command '%s' failed with rc %d\nError message:\n%s" % (command, rc, error.rstrip()))
-		
-	except OSError, e:
-		raise e		 
+	if dryrun:
+		print MessageCatalog.getLocalizedMessage(MessageCatalog.MSG_COMMAND_EXECUTING,command)			
+		result=""
+		rc=0
+	else:
+		try:
+			proc = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True)
+			result,error = proc.communicate()
+			rc = proc.returncode		
+
+			if rc != 0 and noRC:
+				raise Exception("Command '%s' failed with rc %d\nError message:\n%s" % (command, rc, error.rstrip()))
+	
+		except OSError, e:
+			raise e		 
 	
 	if noRC:
 		return result
@@ -162,9 +168,9 @@ class MessageCatalog(object):
                    "EN": "RSD0002I {0}",
                    "DE": "RSD0002I {0}" 
 	}
-	MSG_DETECTED_PARTITIONS = {
-				   "EN": "RSD0003I Detected following partitions",
-				   "DE": "RSD0003I Folgende Partitionen wurden erkannt"
+	MSG_DETECTING_PARTITIONS = {
+				   "EN": "RSD0003I Detecting partitions",
+				   "DE": "RSD0003I Partitionen werden erkannt"
 	}
 	MSG_DETECTED_PARTITION = {
 				   "EN": "RSD0004I {0} - Size: {1} - Free: {2} - Mountpoint: {3} - Partitiontype: {4} - Partitiontable: {5}",
@@ -175,16 +181,16 @@ class MessageCatalog(object):
 				   "DE": "RSD0005E Keine mögliche Ziel root Partition gefunden"
 	}
 	MSG_ELIGIBLES_AS_ROOT = {
-				   "EN": "RSD0006I Following partitions are eligible as new target root partition",
-				   "DE": "RSD0006I Folgende Partitionen sind mögliche neue Ziel root Partition"
+				   "EN": "RSD0006I Following partitions are eligible as a new root partition",
+				   "DE": "RSD0006I Folgende Partitionen sind eine mögliche neue root Partition"
 	}
 	MSG_ELIGIBLE_AS_ROOT = {
-				   "EN": "RSD0007I {0}",
-				   "DE": "RSD0007I {0}"
+				   "EN": "RSD0007I {0}: {1}",
+				   "DE": "RSD0007I {0}: {1}"
 	}
 	MSG_ENTER_PARTITION = {
-				   "EN": "RSD0008I Enter partition: ",
-				   "DE": "RSD0008I Partition eingeben: "
+				   "EN": "RSD0008I Enter partition name: ",
+				   "DE": "RSD0008I Partitionsnamen eingeben: "
 	}
 	MSG_PARTITION_INVALIDE = {
 				   "EN": "RSD0009E Partition {0} does not exist",
@@ -219,8 +225,8 @@ class MessageCatalog(object):
 				   "DE": "RSD0016W Partition {0} wird übersprungen - Partitionstyp {1} stimmt nicht"
 	}	
 	MSG_PARTITION_INVALID_FILEPARTITION = {
-				   "EN": "RSD0017W Skipping {0} - Partition has Partitiontabletype {1} but has to be gpt because multiple disks are attached",
-				   "DE": "RSD0017W Partition {0} wird übersprungen - Partition hat Partitionstabellenbtyp {1} der aber gpt sein mauss da mehrere Platten angeschlossen sind"
+				   "EN": "RSD0017W Skipping {0} - Partition has partitiontable type {1} but has to be gpt",
+				   "DE": "RSD0017W Partition {0} wird übersprungen - Partition hat Partitionstabellentyp {1} der aber gpt sein muss"
 	}	
 	MSG_PARTITION_NOT_EMPTY = {
 				   "EN": "RSD0018W Skipping {0} - Partition is not empty or there are more directories than /home/pi",
@@ -298,10 +304,19 @@ class MessageCatalog(object):
 				   "EN": "RSD0036W Target partition {0} already used in fstab. Commenting out this line",
 				   "DE": "RSD0036W Zielpartition {0} wird in der fstab schon benutzt. Die Zeile wird auskommentiert"
 	}
+	MSG_DRYRUN = {
+				   "EN": "RSD0037I Note: Commands will not be executed but listed",
+				   "DE": "RSD0037I Hinweis: Befehle werden nicht ausgeführt aber angezeigt"
+	}
+	MSG_COMMAND_EXECUTING = {
+				   "EN": 'RSD0038I Executing command "{0}"',
+				   "DE": 'RSD0038I Befehl "{0}" wird ausgeführt'
+	}
 
 
 class Partition(object):
 	def __init__(self, name, type=""):
+		self.__initialName=name
 		if name.startswith("/dev"):
 			self.__deviceName=name
 			self.__partUUID = blkid().getPartUUID(name)
@@ -313,9 +328,10 @@ class Partition(object):
 			self.__partType = DeviceManager().getType(self.__deviceName)
 		else:
 			self.__partType = type
-			
-		print "%s" % self
-			
+
+	def getInitialName(self):
+		return self.__initialName
+						
 	def getDeviceName(self):
 		return self.__deviceName
 	
@@ -768,7 +784,7 @@ def collectEligiblePartitions():
 		print MessageCatalog.getLocalizedMessage(MessageCatalog.MSG_ROOT_ALREADY_MOVED, cmdPartition)
 		sys.exit(-1) 
 
-	print MessageCatalog.getLocalizedMessage(MessageCatalog.MSG_SOURCE_ROOT_PARTITION, sourceRootPartition, asReadable(sourceRootSize), asReadable(sourceRootUsed), sourceRootType)
+	print MessageCatalog.getLocalizedMessage(MessageCatalog.MSG_SOURCE_ROOT_PARTITION, sourceRootPartition.getDeviceName(), asReadable(sourceRootSize), asReadable(sourceRootUsed), sourceRootType)
 		
 	validTargetPartitions = []
 
@@ -776,7 +792,7 @@ def collectEligiblePartitions():
 						
 	for partition in availableTargetPartitions:
 
-		print MessageCatalog.getLocalizedMessage(MessageCatalog.MSG_TESTING_PARTITION, partition, asReadable(dm.getSize(partition)), asReadable(dm.getFree(partition)), dm.getType(partition))
+		print MessageCatalog.getLocalizedMessage(MessageCatalog.MSG_TESTING_PARTITION, partition.getDeviceName(), asReadable(dm.getSize(partition)), asReadable(dm.getFree(partition)), dm.getType(partition))
 		partitionMountPoint = dm.getMountpoint(partition)
 		logger.debug("partitionMountPoint: %s" % (partitionMountPoint))
 
@@ -838,12 +854,14 @@ ROOTFS = "/dev/root"
 LOG_FILENAME = "./%s.log" % MYNAME
 LOG_LEVEL = logging.INFO 
 force=False
+dryrun=False
 
 logLevels = { "INFO": logging.INFO , "DEBUG": logging.DEBUG, "WARNING": logging.WARNING }
 
 parser = argparse.ArgumentParser(description="Move SD root partition to external partition on Raspberry Pi")
 parser.add_argument("-l", "--log", help="log file (default: " + LOG_FILENAME + ")")
 parser.add_argument("-d", "--debug", help="debug level %s (default: %s)" % ('|'.join(logLevels.keys()), logLevels.keys()[logLevels.values().index(LOG_LEVEL)]))
+parser.add_argument("-n", "--dryrun", help="dry run. Don't execute any commands but display them",action='store_true')
 parser.add_argument("-g", "--language", help="message language %s (default: %s)" % ('|'.join(MessageCatalog.getSupportedLocales()), MessageCatalog.getDefaultLocale()))
 parser.add_argument("-f", "--force", help="allow target partitions which are smaller than the source partition", action='store_true')
 
@@ -868,6 +886,9 @@ if args.debug:
 if args.force:
 	force=True	
 
+if args.dryrun:
+	dryrun=True
+	
 # setup logging
 
 if os.path.isfile(LOG_FILENAME):
@@ -892,12 +913,11 @@ if os.geteuid() != 0:
 try:
 
 	print MessageCatalog.getLocalizedMessage(MessageCatalog.MSG_VERSION, GIT_CODEVERSION)
-	print
 	
-	print MessageCatalog.getLocalizedMessage(MessageCatalog.MSG_DETECTED_PARTITIONS)
+	print MessageCatalog.getLocalizedMessage(MessageCatalog.MSG_DETECTING_PARTITIONS)
 	partitions = DeviceManager().getAllDetected()
 	for partition in partitions:
-		print MessageCatalog.getLocalizedMessage(MessageCatalog.MSG_DETECTED_PARTITION, partition[0], asReadable(partition[1]), asReadable(partition[2]), partition[3], partition[4], partition[5])
+		print MessageCatalog.getLocalizedMessage(MessageCatalog.MSG_DETECTED_PARTITION, partition[0].getDeviceName(), asReadable(partition[1]), asReadable(partition[2]), partition[3], partition[4], partition[5])
 		
 	(validTargetPartitions, sourceRootPartition) = collectEligiblePartitions()
 	
@@ -906,64 +926,75 @@ try:
 		sys.exit(-1)
 	
 	print MessageCatalog.getLocalizedMessage(MessageCatalog.MSG_ELIGIBLES_AS_ROOT)
+	i=1
 	for partition in validTargetPartitions:
-		print MessageCatalog.getLocalizedMessage(MessageCatalog.MSG_ELIGIBLE_AS_ROOT, partition)
+		print MessageCatalog.getLocalizedMessage(MessageCatalog.MSG_ELIGIBLE_AS_ROOT, i, partition.getDeviceName())
+		i+=1
+
+	if dryrun:
+		print MessageCatalog.getLocalizedMessage(MessageCatalog.MSG_DRYRUN)
 		
 	inputAvailable = False
 	while not inputAvailable:	
-		selection = raw_input(MessageCatalog.getLocalizedMessage(MessageCatalog.MSG_ENTER_PARTITION))
-		inputAvailable = selection in validTargetPartitions
-		if not inputAvailable:
-			print MessageCatalog.getLocalizedMessage(MessageCatalog.MSG_PARTITION_INVALIDE, selection)
-	
-	targetRootPartition = selection
+		targetRootPartitionSelected = raw_input(MessageCatalog.getLocalizedMessage(MessageCatalog.MSG_ENTER_PARTITION))
+		if targetRootPartitionSelected.isdigit() and int(targetRootPartitionSelected) >= 1 and int(targetRootPartitionSelected) <= len(validTargetPartitions):
+			targetRootPartitionSelected = validTargetPartitions[int(targetRootPartitionSelected)-1]
+			inputAvailable=True
+		else:
+			inputAvailable = targetRootPartitionSelected in validTargetPartitions
+			if not inputAvailable:
+				print MessageCatalog.getLocalizedMessage(MessageCatalog.MSG_PARTITION_INVALIDE, targetRootPartitionSelected)
 	
 	dm = DeviceManager()				
 	
 	sourceDirectory = dm.getMountpoint(sourceRootPartition)
-	targetDirectory = dm.getMountpoint(targetRootPartition)
+	targetDirectory = dm.getMountpoint(targetRootPartitionSelected)
 	logger.debug("sourceDirectory: %s - targetDirectory: %s" % (sourceDirectory, targetDirectory))
 	
-	print MessageCatalog.getLocalizedMessage(MessageCatalog.MSG_PARTITION_WILL_BE_COPIED, sourceRootPartition, targetRootPartition)
+	print MessageCatalog.getLocalizedMessage(MessageCatalog.MSG_PARTITION_WILL_BE_COPIED, sourceRootPartition.getDeviceName(), targetRootPartitionSelected.getDeviceName())
 	print MessageCatalog.getLocalizedMessage(MessageCatalog.MSG_ARE_YOU_SURE)
+
+	if dryrun:
+		print MessageCatalog.getLocalizedMessage(MessageCatalog.MSG_DRYRUN)
+		
 	selection = raw_input('')
 	if selection not in ['Y', 'y', 'J', 'j']:
 		sys.exit(0)
 	
 	command = "tar cf - --one-file-system --checkpoint=1000 %s | ( cd %s; tar xfp -)" % (sourceDirectory, targetDirectory)
 	print MessageCatalog.getLocalizedMessage(MessageCatalog.MSG_COPYING_ROOT)
-	executeCommand(command)
+	executeCommand(command,dryrun=dryrun)
 	
-	if dm.isGPT(targetRootPartition):
-		targetID = "PARTUUID=" + dm.getGUID(targetRootPartition)	
+	if dm.isGPT(targetRootPartitionSelected):
+		targetID = "PARTUUID=" + dm.getGUID(targetRootPartitionSelected)	
 	else:
-		targetID = targetRootPartition
+		targetID = targetRootPartitionSelected.getPartUUID()
 	logger.debug("targetID: %s " % (targetID))
 
 	# check if root partition is already used in fstab
-	command = 'grep -q "%s" %s/etc/fstab' % (targetRootPartition, targetDirectory)
+	command = 'grep -q "%s" %s/etc/fstab' % (targetRootPartitionSelected, targetDirectory)
 	(rc, result) = executeCommand(command, noRC = False)
 	if rc == 0:
-		print MessageCatalog.getLocalizedMessage(MessageCatalog.MSG_FOUND_IN_FSTAB, targetRootPartition)
-		command = 'sed -i "s|^%s|# commented out by %s|g" %s/etc/fstab' % (targetRootPartition, MYNAME, targetDirectory)
-		executeCommand(command)
+		print MessageCatalog.getLocalizedMessage(MessageCatalog.MSG_FOUND_IN_FSTAB, targetRootPartitionSelected)
+		command = 'sed -i "s|^%s|# commented out by %s|g" %s/etc/fstab' % (targetRootPartitionSelected, MYNAME, targetDirectory)
+		executeCommand(command,dryrun=dryrun)
 	
 	# change /etc/fstab on target
-	command = "sed -i \"s|%s|%s|\" %s/etc/fstab" % (sourceRootPartition, targetID, targetDirectory)
-	print MessageCatalog.getLocalizedMessage(MessageCatalog.MSG_UPDATING_FSTAB, targetRootPartition)
-	executeCommand(command)
+	command = "sed -i \"s|%s|%s|\" %s/etc/fstab" % (sourceRootPartition.getInitialName(), targetID, targetDirectory)
+	print MessageCatalog.getLocalizedMessage(MessageCatalog.MSG_UPDATING_FSTAB, targetRootPartitionSelected)
+	executeCommand(command,dryrun=dryrun)
 	
 	# create backup copy of old cmdline.txt
 	command = "cp -a %s %s; chmod -w %s" % (CMD_FILE, CMD_FILE+".sd", CMD_FILE+".sd")	
-	print MessageCatalog.getLocalizedMessage(MessageCatalog.MSG_SAVING_OLD_CMDFILE, CMD_FILE, sourceRootPartition, CMD_FILE+".sd")
-	executeCommand(command)
+	print MessageCatalog.getLocalizedMessage(MessageCatalog.MSG_SAVING_OLD_CMDFILE, CMD_FILE, sourceRootPartition.getDeviceName(), CMD_FILE+".sd")
+	executeCommand(command,dryrun=dryrun)
 	
 	# update cmdline.txt	
-	command = "sed -i \"s|root=[^ ]\+|root=%s|g\" %s/%s" % (targetID, sourceDirectory, CMD_FILE)
-	print MessageCatalog.getLocalizedMessage(MessageCatalog.MSG_UPDATING_CMDFILE, CMD_FILE, targetRootPartition)
-	executeCommand(command)
+	command = "sed -i \"s|root=[^ ]\+|root=%s|g\" %s" % (targetID, CMD_FILE)
+	print MessageCatalog.getLocalizedMessage(MessageCatalog.MSG_UPDATING_CMDFILE, CMD_FILE, targetRootPartitionSelected)
+	executeCommand(command,dryrun=dryrun)
 	
-	print MessageCatalog.getLocalizedMessage(MessageCatalog.MSG_DONE, sourceRootPartition, targetRootPartition)
+	print MessageCatalog.getLocalizedMessage(MessageCatalog.MSG_DONE, sourceRootPartition.getDeviceName(), targetRootPartitionSelected)
 
 except KeyboardInterrupt as ex:
 	print 
