@@ -58,19 +58,10 @@ import math
 import locale
 import traceback
 
-# various constants
-
-SSD_DEVICE_CARD = "/dev/mmcblk0"
-SSD_DEVICE = SSD_DEVICE_CARD + "p"
-BOOT_PARTITION = SSD_DEVICE + "1"
-ROOT_PARTITION = SSD_DEVICE + "2"
-CMD_FILE = "/boot/cmdline.txt"
-ROOTFS = "/dev/root"
 MYSELF = os.path.basename(__file__)
 MYNAME = os.path.splitext(os.path.split(MYSELF)[1])[0]
-LICENSE="This program comes with ABSOLUTELY NO WARRANTY; This is free software, and you are welcome to redistribute it under certain conditions"
 
-VERSION = "0.2.3.7"    
+VERSION = "0.2.4"    
 
 try:
 	GIT_DATE = "$Date$"
@@ -307,7 +298,52 @@ class MessageCatalog(object):
 				   "EN": "RSD0036W Target partition {0} already used in fstab. Commenting out this line",
 				   "DE": "RSD0036W Zielpartition {0} wird in der fstab schon benutzt. Die Zeile wird auskommentiert"
 	}
+
+
+class Partition(object):
+	def __init__(self, name, type=""):
+		if name.startswith("/dev"):
+			self.__deviceName=name
+			self.__partUUID = blkid().getPartUUID(name)
+		else:
+			self.__partUUID=name
+			self.__deviceName=blkid().getDeviceName(name)								
+
+		if type == "":
+			self.__partType = DeviceManager().getType(self.__deviceName)
+		else:
+			self.__partType = type
+			
+		print "%s" % self
+			
+	def getDeviceName(self):
+		return self.__deviceName
 	
+	def getPartUUID(self):
+		return self.__partUUID
+
+	def getPartType(self):
+		return self.__partType
+	
+	def hasPartUUID(self):
+		return self.__partUUID!=""
+
+	def isSDPartition(self):
+		return self.getDeviceName().startswith(SSD_DEVICE)
+	
+	def __eq__(self, other):
+		if isinstance(other, Partition):
+			return self.__deviceName == other.getDeviceName()
+		if isinstance(other, str):
+			return self.__deviceName == other				
+		return NotImplemented	
+       
+	def __str__(self):
+		if self.hasPartUUID():
+			return "%s: Type: %s PARTUUID: %s" % (self.__deviceName,self.__partType, self.__partUUID)
+		else:
+			return "%s: Type: %s" % (self.__deviceName,self.__partType) 
+			
 # baseclass for all the linux commands dealing with partitions
 
 class BashCommand(object):
@@ -333,8 +369,11 @@ class BashCommand(object):
 	def _postprocessResult(self):
 		pass
 	
-	def _splitPartition(self, partition):		
-		m = re.match(self.__SPLIT_PARTITION_REGEX, partition)
+	def _splitPartition(self, partition):
+		if isinstance(partition,Partition):		
+			m = re.match(self.__SPLIT_PARTITION_REGEX, partition.getDeviceName())
+		else:
+			m = re.match(self.__SPLIT_PARTITION_REGEX, partition)
 		if m:
 			return (m.group(1), m.group(2))
 		else:
@@ -362,7 +401,7 @@ class df(BashCommand):
 		self._commandResult = self._commandResult[1:]
 		
 	def __mapRootPartition(self, partition):
-		if partition == ROOT_PARTITION:
+		if partition == ROOT_PARTITION.getDeviceName():
 			return ROOTFS
 		else:
 			return partition
@@ -421,7 +460,7 @@ class lsblk(BashCommand):
 		for line in self.getResult():
 			lineElements = line.split()
 			if lineElements[0] != SSD_DEVICE_CARD:
-				result.append(lineElements[0])
+				result.append(Partition(lineElements[0]))
 		return result
 	
 '''
@@ -466,7 +505,7 @@ class fdisk(BashCommand):
 		result = []
 		for line in self.getResult():
 			lineElements = line.split()
-			result.append(lineElements[0])
+			result.append(Partition(lineElements[0]))
 		return result
 
 '''
@@ -544,10 +583,14 @@ class sgdisk(BashCommand):
 		
 '''
 root@raspi4G:~# blkid
-/dev/mmcblk0p2: UUID="b0fe2b87-858f-4502-8169-893a41302b45" TYPE="ext4" 
-/dev/mmcblk0p1: SEC_TYPE="msdos" LABEL="boot" UUID="993B-8922" TYPE="vfat" 
-/dev/sda1: UUID="d806d9f1-814a-4607-a20c-6fb1ecddf48f" TYPE="ext4" 
+/dev/mmcblk0p1: LABEL="boot" UUID="0763-6493" TYPE="vfat" PARTUUID="775d7214-01"
+/dev/mmcblk0p2: UUID="db3c7508-ce47-4b20-b1da-a1ac4446755c" TYPE="ext4" PARTUUID="775d7214-02"
+/dev/sdb1: UUID="582f0522-3c72-4e4c-a327-435caa23c212" TYPE="ext4" PARTLABEL="Linux filesystem" PARTUUID="9aec15d8-65bc-4c55-84e8-f2024eae2ce9"
+/dev/sda2: UUID="64047412-cc47-422c-b458-35e9fa69f1f9" TYPE="ext4" PARTUUID="0683fbcd-02"
+/dev/sda1: LABEL="boot" UUID="70CE-EB76" TYPE="vfat" PARTUUID="0683fbcd-01"
+/dev/mmcblk0: PTUUID="775d7214" PTTYPE="dos"
 '''
+	
 class blkid(BashCommand):
 	def __init__(self):
 		BashCommand.__init__(self, 'blkid')                         
@@ -561,6 +604,27 @@ class blkid(BashCommand):
 				m = re.match(regex, line)				
 				if m:
 					return m.group(1)								
+		return None
+
+	def getPartUUID(self, filesystem):
+		for line in self.getResult():
+			lineElements = line.split()
+			fs = lineElements[0][:-1]
+			if (fs) == filesystem:
+				regex = ".*PARTUUID=\"([^\"]*)\""		
+				m = re.match(regex, line)				
+				if m:
+					return m.group(1)								
+		return None
+
+	def getDeviceName(self, partuuid):
+		for line in self.getResult():
+			regex = ".*PARTUUID=\"([^\"]*)\""		
+			m = re.match(regex, line)				
+			if m and m.group(1) == partuuid:
+				lineElements = line.split()							
+				return lineElements[0][:-1]
+			
 		return None
 	
 	def getDevices(self):
@@ -588,13 +652,16 @@ class DeviceManager():
 		return self.__fdisk.getPartitions()
 	
 	def getSize(self, partition):
-		return self.__lsblk.getSize(partition)
+		return self.__lsblk.getSize(partition.getDeviceName())
 
 	def getFree(self, partition):
-		return self.__df.getFree(partition)
+		return self.__df.getFree(partition.getDeviceName())
 	
 	def getType(self, partition):
 		return self.__blkid.getType(partition)
+
+	def getPartUUID(self, partition):
+		return self.__blkid.getPartUUID(partition)
 	
 	def getMountpoint(self, partition):
 		return self.__lsblk.getMountpoint(partition)
@@ -614,6 +681,7 @@ class DeviceManager():
 	'''
 	root@raspi4G:~# cat /boot/cmdline.txt
 	dwc_otg.lpm_enable=0 console=ttyAMA0,115200 kgdboc=ttyAMA0,115200 console=tty1 root=/dev/mmcblk0p2 rootfstype=ext4 elevator=deadline rootwait
+	dwc_otg.lpm_enable=0 console=serial0,115200 console=tty1 root=PARTUUID=13f4a298-02 rootfstype=ext4 elevator=deadline fsck.repair=yes rootwait
 	'''
 	
 	def getSDPartitions(self):
@@ -624,15 +692,15 @@ class DeviceManager():
 			
 		result = executeCommand('cat ' + CMD_FILE)
 
-		regex = ".*root=(.*) .*rootfstype=([0-9a-zA-Z]+)"		
-		m = re.match(regex, result)				
+		regex = ".*root=(PARTUUID=)?(.*) .*rootfstype=([0-9a-zA-Z]+)"		
+		m = re.match(regex, result,re.IGNORECASE)				
 		if m:
-			rootPartition = m.group(1)
-			rootFilesystemType = m.group(2)
+			rootPartition = m.group(2)
+			rootFilesystemType = m.group(3)
 		else:
-			raise Exception("Unable to detect rootPartition and/or rootfstype in %s" % (CMD_FILE))
+			raise Exception("Unable to detect rootPartition and/or rootfstype in %s" % (CMD_FILE))		
 		
-		return (rootPartition, rootFilesystemType)
+		return Partition(rootPartition, type=rootFilesystemType)
 	
 	def getAllDetected(self):
 		partitions = self.getPartitions()
@@ -663,35 +731,40 @@ class MyLogger(object):
 
 def collectEligiblePartitions():
 
-	global logger
+	global logger 
+	global ROOT_PARTITION
 	
 	dm = DeviceManager()				
 					
-	(cmdPartition, cmdType) = dm.getSDPartitions()
-	logger.debug("cmdPartition %s - %s " % (cmdPartition, cmdType))
+	cmdPartition = dm.getSDPartitions()
+	logger.debug("cmdPartition %s" % (cmdPartition))
+	logger.debug("ROOT_PARTITION %s" % (ROOT_PARTITION))
 
-	if cmdPartition != ROOT_PARTITION:
-		print MessageCatalog.getLocalizedMessage(MessageCatalog.MSG_ROOTPARTITION_NOT_ON_SDCARD, cmdPartition)
+	if not cmdPartition == ROOT_PARTITION:
+		print MessageCatalog.getLocalizedMessage(MessageCatalog.MSG_ROOTPARTITION_NOT_ON_SDCARD, cmdPartition.getDeviceName())
 		sys.exit(-1)
 		
 	availableTargetPartitions = []
 	
 	for partition in dm.getPartitions():
-		if not partition.startswith(SSD_DEVICE):
-			if dm.getType(partition) != cmdType:
-				print MessageCatalog.getLocalizedMessage(MessageCatalog.MSG_PARTITION_INVALID_TYPE, partition, dm.getType(partition))
+		if not partition.getDeviceName().startswith(SSD_DEVICE):
+			if partition.getPartType() != cmdPartition.getPartType():
+				print MessageCatalog.getLocalizedMessage(MessageCatalog.MSG_PARTITION_INVALID_TYPE, partition.getDeviceName(), partition.getPartType())
 			else:
 				availableTargetPartitions.append(partition)
 
-	print MessageCatalog.getLocalizedMessage(MessageCatalog.MSG_TARGET_PARTITION_CANDIDATES, ' '.join(availableTargetPartitions))
+	availableTargetPartitionNames = [ p.getDeviceName() for p in availableTargetPartitions ]
+	print MessageCatalog.getLocalizedMessage(MessageCatalog.MSG_TARGET_PARTITION_CANDIDATES, ' '.join(availableTargetPartitionNames))
 	
 	sourceRootPartition = ROOT_PARTITION
 	sourceRootType = dm.getType(ROOT_PARTITION)
 	sourceRootSize = dm.getSize(ROOT_PARTITION)
 	sourceRootFree = dm.getFree(ROOT_PARTITION)
 	sourceRootUsed = sourceRootSize - sourceRootFree
+
+	logger.debug("cmdPartition: %s\nsourceRootPartition: %s" % (cmdPartition,sourceRootPartition))
 	
-	if cmdPartition != sourceRootPartition:
+	if not cmdPartition.isSDPartition():
 		print MessageCatalog.getLocalizedMessage(MessageCatalog.MSG_ROOT_ALREADY_MOVED, cmdPartition)
 		sys.exit(-1) 
 
@@ -753,6 +826,15 @@ def collectEligiblePartitions():
 ################################### Main #########################################
 ##################################################################################
 
+# various constants
+
+SSD_DEVICE_CARD = "/dev/mmcblk0"
+SSD_DEVICE = SSD_DEVICE_CARD + "p"
+BOOT_PARTITION = Partition(SSD_DEVICE + "1")
+ROOT_PARTITION = Partition(SSD_DEVICE + "2")
+CMD_FILE = "/boot/cmdline.txt"
+ROOTFS = "/dev/root"
+
 LOG_FILENAME = "./%s.log" % MYNAME
 LOG_LEVEL = logging.INFO 
 force=False
@@ -810,7 +892,6 @@ if os.geteuid() != 0:
 try:
 
 	print MessageCatalog.getLocalizedMessage(MessageCatalog.MSG_VERSION, GIT_CODEVERSION)
-	print LICENSE
 	print
 	
 	print MessageCatalog.getLocalizedMessage(MessageCatalog.MSG_DETECTED_PARTITIONS)
