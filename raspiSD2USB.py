@@ -77,6 +77,8 @@ except Exception,e:
 
 GIT_CODEVERSION = MYSELF + " V" + str(VERSION) + " " + GIT_DATE_ONLY + "/" + GIT_TIME_ONLY + " " + GIT_COMMIT_ONLY
 
+logger = logging.getLogger(__name__)
+
 class Singleton:
 
     def __init__(self, decorated):
@@ -409,7 +411,8 @@ class BashCommand(object):
 			self._commandResult = executeCommand(self.__command)
 			self._commandResult = self._commandResult.splitlines()
 			self._postprocessResult()
-			self.__executed = True			
+			self.__executed = True
+			logger.debug("Command: %s\nresult: %s" % (self.__command,self._commandResult))			
 		
 	def getResult(self):
 		self.__collect()
@@ -430,14 +433,14 @@ class BashCommand(object):
 	
 '''
 root@raspi4G:~# df -T
-Filesystem	 Type	 1K-blocks	Used Available Use% Mounted on
-rootfs		 rootfs	 3683920 2508276	968796  73% /
-/dev/root	  ext4	   3683920 2508276	968796  73% /
-devtmpfs	   devtmpfs	244148	   0	244148   0% /dev
-tmpfs		  tmpfs		49664	 236	 49428   1% /run
-tmpfs		  tmpfs		 5120	   0	  5120   0% /run/lock
-tmpfs		  tmpfs		99320	   0	 99320   0% /run/shm
-/dev/mmcblk0p1 vfat		 57288	9864	 47424  18% /boot
+Filesystem	   Type	 	1K-blocks	Used 	Available 	Use% 	Mounted on
+rootfs		   rootfs	3683920 	2508276	968796  	73% 	/
+/dev/root	   ext4	   	3683920 	2508276	968796  	73% 	/
+devtmpfs	   devtmpfs	244148	   	0		244148   	0% 		/dev
+tmpfs		   tmpfs	49664	 	236	 	49428   	1% 		/run
+tmpfs		   tmpfs	 5120	   	0	  	5120   		0% 		/run/lock
+tmpfs		   tmpfs	99320	   	0	 	99320   	0% 		/run/shm
+/dev/mmcblk0p1 vfat		57288		9864	47424  		18% 	/boot
 '''
 
 class df(BashCommand):
@@ -456,6 +459,15 @@ class df(BashCommand):
 			return partition
 			
 	def getSize(self, partition):
+		logger.debug("Retrieving partition %s\n", partition)
+		partition = self.__mapRootPartition(partition)
+		logger.debug("Looking up partition %s\n", partition)
+		for line in self.getResult():
+			lineElements = line.split()
+			if lineElements[0] == partition:
+				return int(lineElements[2])*1024
+
+	def getUsed(self, partition):
 		partition = self.__mapRootPartition(partition)
 		for line in self.getResult():
 			lineElements = line.split()
@@ -463,7 +475,7 @@ class df(BashCommand):
 				return int(lineElements[3])*1024
 
 	def getFree(self, partition):
-		partition = self.__mapRootPartition(partition)
+		partition = self.__mapRootPartition(partition)		
 		for line in self.getResult():
 			lineElements = line.split()
 			if lineElements[0] == partition:
@@ -762,12 +774,14 @@ class DeviceManager():
 		partitions = self.getPartitions()
 		details = []
 		for key,partition in partitions.iteritems():
+			logger.debug("Processing partition %s" % partition)
 			size = self.getSize(partition)
 			free = self.getFree(partition)
 			mountpoint = self.getMountpoint(partition)
 			partitiontype = self.getType(partition)
 			partitionTabletype = self.getPartitiontableType(partition)
 			details.append([partition, size, free, mountpoint, partitiontype, partitionTabletype])
+			logger.debug("Partition data %s" % details[:-1])
 		return details
 
 # stderr and stdout logger 
@@ -932,7 +946,6 @@ if args.dryrun:
 if os.path.isfile(LOG_FILENAME):
 	os.remove(LOG_FILENAME)
 	
-logger = logging.getLogger(__name__)
 logger.setLevel(LOG_LEVEL)
 handler = logging.handlers.RotatingFileHandler(LOG_FILENAME, backupCount=1)
 formatter = logging.Formatter('%(asctime)s %(levelname)-8s %(message)s')
