@@ -57,6 +57,7 @@ import argparse
 import math
 import locale
 import traceback
+from _symtable import FREE
 
 MYSELF = os.path.basename(__file__)
 MYNAME = os.path.splitext(os.path.split(MYSELF)[1])[0]
@@ -348,6 +349,12 @@ class Partition(object):
 			self.__partType = DeviceManager.Instance().getType(self.__deviceName)
 		else:
 			self.__partType = type
+			
+		self.__size = 0
+		self.__free = 0
+		self.__mountpoint = ""
+		self.__partitionTabletype = ""
+			
 
 	def getInitialName(self):
 		return self.__initialName
@@ -356,7 +363,7 @@ class Partition(object):
 		try: 
 			return self.__deviceName
 		except AttributeError:
-			self.__deviceName=DeviceManager.Instance().getDeviceName(name)								
+			self.__deviceName=DeviceManager.Instance().getDeviceName(self.__partUUID)								
 		return self.__deviceName
 	
 	def getPartUUID(self):
@@ -391,9 +398,9 @@ class Partition(object):
        
 	def __str__(self):
 		if self.hasPartUUID():
-			return "%s: Type: %s PARTUUID: %s" % (self.__deviceName,self.__partType, self.__partUUID)
+			return "%s: Type: %s PARTUUID: %s" % (self.getDeviceName(),self.getPartType(), self.getPartUUID())
 		else:
-			return "%s: Type: %s" % (self.__deviceName,self.__partType) 
+			return "%s: Type: %s" % (self.getDeviceName(),self.getPartType()) 
 			
 # baseclass for all the linux commands dealing with partitions
 
@@ -516,7 +523,7 @@ class lsblk(BashCommand):
 					return None
 		return None
 			
-	def getPartitions(self):
+	def getPartitionNames(self):
 		result = {}
 		for line in self.getResult():
 			lineElements = line.split()
@@ -711,13 +718,22 @@ class DeviceManager():
 		self.__lsblk = lsblk()
 		self.__fdisk = fdisk()
 		self.__parted = parted()
-		self.__partitions = None
+		self.__partitions = []
 		
-	def getPartitions(self):
-		
-		if self.__partitions == None:
-			self.__partitions=self.__fdisk.getPartitions()
+	def getPartitions(self):		
+		if len(self.__partitions) == 0:
+			partitions=self.__fdisk.getPartitions()
+			logger.debug("Partitions: %s" % partitions)
+			for deviceName, partition in partitions.iteritems():
+				partition.size = self.getSize(partition)
+				partition.free = self.getFree(partition)
+				partition.mountpoint = self.getMountpoint(partition)
+				partition.partitiontype = self.getType(partition)
+				partition.partitionTabletype = self.getPartitiontableType(partition)						
 		return self.__partitions
+	
+	def getDeviceName(self, partuuid):
+		return self.__blkid.getDeviceName(partuuid)
 	
 	def getSize(self, partition):
 		return self.__df.getSize(partition.getDeviceName())
@@ -770,20 +786,6 @@ class DeviceManager():
 		
 		return Partition(rootPartition, type=rootFilesystemType)
 	
-	def getAllDetected(self):
-		partitions = self.getPartitions()
-		details = []
-		for key,partition in partitions.iteritems():
-			logger.debug("Processing partition %s" % partition)
-			size = self.getSize(partition)
-			free = self.getFree(partition)
-			mountpoint = self.getMountpoint(partition)
-			partitiontype = self.getType(partition)
-			partitionTabletype = self.getPartitiontableType(partition)
-			details.append([partition, size, free, mountpoint, partitiontype, partitionTabletype])
-			logger.debug("Partition data %s" % details[:-1])
-		return details
-
 # stderr and stdout logger 
 
 class MyLogger(object):
@@ -813,6 +815,8 @@ def collectEligiblePartitions():
 		sys.exit(-1)
 		
 	availableTargetPartitions = []
+	
+	dm = DeviceManager.Instance()
 	
 	for partition in dm.getPartitions():
 		if not partition.getDeviceName().startswith(SSD_DEVICE):
@@ -966,7 +970,7 @@ try:
 	print MessageCatalog.getLocalizedMessage(MessageCatalog.MSG_VERSION, GIT_CODEVERSION)
 	
 	print MessageCatalog.getLocalizedMessage(MessageCatalog.MSG_DETECTING_PARTITIONS)
-	partitions = DeviceManager.Instance().getAllDetected()
+	partitions = DeviceManager.Instance().getPartitions()
 	for partition in partitions:
 		print MessageCatalog.getLocalizedMessage(MessageCatalog.MSG_DETECTED_PARTITION, partition[0].getDeviceName(), asReadable(partition[1]), asReadable(partition[2]), partition[3], partition[4], partition[5])
 		
@@ -996,7 +1000,7 @@ try:
 			if not inputAvailable:
 				print MessageCatalog.getLocalizedMessage(MessageCatalog.MSG_PARTITION_INVALIDE, targetRootPartitionSelected)
 	
-	dm = DeviceManager()				
+	dm = DeviceManager.Instance()				
 	
 	sourceDirectory = dm.getMountpoint(sourceRootPartition)
 	targetDirectory = dm.getMountpoint(targetRootPartitionSelected)
