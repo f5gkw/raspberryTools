@@ -77,6 +77,24 @@ except Exception,e:
 
 GIT_CODEVERSION = MYSELF + " V" + str(VERSION) + " " + GIT_DATE_ONLY + "/" + GIT_TIME_ONLY + " " + GIT_COMMIT_ONLY
 
+class Singleton:
+
+    def __init__(self, decorated):
+        self._decorated = decorated
+
+    def Instance(self):
+        try:
+            return self._instance
+        except AttributeError:
+            self._instance = self._decorated()
+            return self._instance
+
+    def __call__(self):
+        raise TypeError('Singletons must be accessed through `Instance()`.')
+
+    def __instancecheck__(self, inst):
+        return isinstance(inst, self._decorated)
+        
 # return big number human readable in KB, MB ...
 
 def asReadable(number):
@@ -319,15 +337,13 @@ class Partition(object):
 		self.__initialName=name
 		if name.startswith("/dev"):
 			self.__deviceName=name
-			self.__partUUID = blkid().getPartUUID(name)
 			self.__initialUUID=False
 		else:
 			self.__partUUID=name
-			self.__deviceName=blkid().getDeviceName(name)								
 			self.__initialUUID=True
 
 		if type == "":
-			self.__partType = DeviceManager().getType(self.__deviceName)
+			self.__partType = DeviceManager.Instance().getType(self.__deviceName)
 		else:
 			self.__partType = type
 
@@ -335,16 +351,28 @@ class Partition(object):
 		return self.__initialName
 						
 	def getDeviceName(self):
+		try: 
+			return self.__deviceName
+		except AttributeError:
+			self.__deviceName=DeviceManager.Instance().getDeviceName(name)								
 		return self.__deviceName
 	
 	def getPartUUID(self):
+		try:
+			return self.__partUUID
+		except AttributeError:
+			self.__partUUID = DeviceManager.Instance().getPartUUID(self.getDeviceName())
 		return self.__partUUID
 
 	def getPartType(self):
+		try:
+			return self.__partType
+		except AttributeError:
+			self.__partType = DeviceManager.Instance().getPartType(self.getDeviceName())
 		return self.__partType
 	
 	def hasPartUUID(self):
-		return self.__partUUID!=""
+		return self.getPartUUID()!=""
 
 	def isInitialUUID(self):
 		return self.__initialUUID
@@ -477,11 +505,10 @@ class lsblk(BashCommand):
 		return None
 			
 	def getPartitions(self):
-		result = []
+		result = {}
 		for line in self.getResult():
 			lineElements = line.split()
-			if lineElements[0] != SSD_DEVICE_CARD:
-				result.append(Partition(lineElements[0]))
+			result[lineElements[0]]=Partition(lineElements[0])
 		return result
 	
 '''
@@ -523,10 +550,10 @@ class fdisk(BashCommand):
 				return int(lineElements[3])
 			
 	def getPartitions(self):
-		result = []
+		result = {}
 		for line in self.getResult():
 			lineElements = line.split()
-			result.append(Partition(lineElements[0]))
+			result[lineElements[0]]=Partition(lineElements[0])
 		return result
 
 '''
@@ -661,22 +688,28 @@ class blkid(BashCommand):
 		return list(set(devices))
 
 # Facade for all the various device/partition commands available on Linux
-	
+
+@Singleton	
 class DeviceManager():
 	
 	def __init__(self):
+		
 		self.__df = df()
 		self.__blkid = blkid()
 		self.__lsblk = lsblk()
 		self.__fdisk = fdisk()
 		self.__parted = parted()
+		self.__partitions = None
 		
 	def getPartitions(self):
-		return self.__fdisk.getPartitions()
+		
+		if self.__partitions == None:
+			self.__partitions=self.__fdisk.getPartitions()
+		return self.__partitions
 	
 	def getSize(self, partition):
-		return self.__lsblk.getSize(partition.getDeviceName())
-
+		return self.__df.getSize(partition.getDeviceName())
+	
 	def getFree(self, partition):
 		return self.__df.getFree(partition.getDeviceName())
 	
@@ -728,7 +761,7 @@ class DeviceManager():
 	def getAllDetected(self):
 		partitions = self.getPartitions()
 		details = []
-		for partition in partitions:	
+		for key,partition in partitions.iteritems():
 			size = self.getSize(partition)
 			free = self.getFree(partition)
 			mountpoint = self.getMountpoint(partition)
@@ -757,9 +790,7 @@ def collectEligiblePartitions():
 	global logger 
 	global ROOT_PARTITION
 	
-	dm = DeviceManager()				
-					
-	cmdPartition = dm.getSDPartitions()
+	cmdPartition = DeviceManager.Instance().getSDPartitions()
 	logger.debug("cmdPartition %s" % (cmdPartition))
 	logger.debug("ROOT_PARTITION %s" % (ROOT_PARTITION))
 
@@ -922,7 +953,7 @@ try:
 	print MessageCatalog.getLocalizedMessage(MessageCatalog.MSG_VERSION, GIT_CODEVERSION)
 	
 	print MessageCatalog.getLocalizedMessage(MessageCatalog.MSG_DETECTING_PARTITIONS)
-	partitions = DeviceManager().getAllDetected()
+	partitions = DeviceManager.Instance().getAllDetected()
 	for partition in partitions:
 		print MessageCatalog.getLocalizedMessage(MessageCatalog.MSG_DETECTED_PARTITION, partition[0].getDeviceName(), asReadable(partition[1]), asReadable(partition[2]), partition[3], partition[4], partition[5])
 		
@@ -975,7 +1006,8 @@ try:
 	if dm.isGPT(targetRootPartitionSelected):
 		targetID = "PARTUUID=" + dm.getGUID(targetRootPartitionSelected)	
 	else:
-		targetID = targetRootPartitionSelected.getPartUUID()
+		targetID = targetRootPartitionSelected.getDeviceName()
+		
 	logger.debug("targetID: %s " % (targetID))
 
 	# check if root partition is already used in fstab
